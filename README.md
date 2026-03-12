@@ -1,8 +1,8 @@
-# 🏒 IceBreaker — Pro Hockey Success Predictor
+# 🏒 IceBreaker — Pro Hockey Success Predictor in Young Athletes
 
 ## 🌟 Overview
 
-**IceBreaker** is a machine learning pipeline designed to predict the probability of an athlete achieving professional-level success in hockey. By analyzing a rich combination of physical performance metrics, psychological scores, demographic background, and training history, the model generates a personalized **pro-success probability** and compares the athlete's profile against known professional players using **cosine similarity**.
+**IceBreaker** is a machine learning pipeline designed to predict the probability of a young athlete achieving professional-level success in hockey. By analyzing a rich combination of physical performance metrics, psychological scores, demographic background, and training history, the model generates a personalized **pro-success probability** and compares the athlete's profile against known professional players using **cosine similarity**.
 
 This tool is built for coaches, scouts, and sports scientists who want data-driven insights into athlete development potential.
 
