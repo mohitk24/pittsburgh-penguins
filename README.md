@@ -111,18 +111,14 @@ Evaluated on a stratified hold-out set of **16 athletes**:
 
 <table>
   <tr>
-    <td align="center"><b>ROC Curve</b><br><img src="output/ROC_Curve.png" width="380"></td>
-    <td align="center"><b>Precision-Recall Curve</b><br><img src="output/Precision_Recall_Curve.png" width="380"></td>
-  </tr>
-  <tr>
-    <td align="center"><b>Confusion Matrix</b> (7 TN · 0 FP · 1 FN · 8 TP)<br><img src="output/Confusion_Matrix.png" width="300"></td>
-    <td align="center"><b>Top Feature Impacts</b> (log-odds)<br><img src="output/Athlete_Features.png" width="380"></td>
+    <td align="center"><b>Feature Impacts</b><br><img src="penguins_features.png" style="max-width: 100%; width: 380px;"></td>
+    <td align="center"><b>Prediction Results</b><br><img src="penguins_prediction_results.png" style="max-width: 100%; width: 380px;"></td>
   </tr>
 </table>
 
 <p align="center">
-  <b>Example prediction output</b><br>
-  <img src="output/Prediction_Scores.png" width="760">
+  <b>Prediction Scores</b><br>
+  <img src="penguins_scores.png" style="max-width: 100%; width: 760px;">
 </p>
 
 > ⚠️ **Note:** With only 16 test athletes, each misclassification moves accuracy by about 6 points, and preprocessing statistics were fitted on the full dataset before the split. Treat these numbers as optimistic. A leakage-free pipeline and repeated cross-validation are the natural next step.
