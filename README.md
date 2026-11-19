@@ -1,204 +1,248 @@
+```markdown
 <div align="center">
 
-# 🏒 IceBreaker
+# 🛠️ Pump Sensor Failure Detector
 
-### Pro Hockey Talent Identifier — from raw athlete assessments to a deployable prediction API
+### Real-time industrial pump monitoring — from 52-channel sensor streams to an Azure-ready detection service
 
-![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
-![scikit-learn](https://img.shields.io/badge/scikit--learn-1.9.1-F7931E?logo=scikitlearn&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3.15.2-3776AB?logo=python&logoColor=white)
+![XGBoost](https://img.shields.io/badge/XGBoost-3.4.1-EB4223?logo=xgboost&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-REST%20API-009688?logo=fastapi&logoColor=white)
 ![Streamlit](https://img.shields.io/badge/Streamlit-UI-FF4B4B?logo=streamlit&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-Containerized-2496ED?logo=docker&logoColor=white)
-![GCP](https://img.shields.io/badge/Google%20Cloud-Cloud%20Run-4285F4?logo=googlecloud&logoColor=white)
-![License](https://img.shields.io/badge/License-MIT-green)
+![Azure](https://img.shields.io/badge/Microsoft%20Azure-Container%20Apps%20%7C%20App%20Service-0078D4?logo=microsoftazure&logoColor=white)
 
-*Built for **Pittsburgh Penguins Performance Training (PPPT)***
-
-[Overview](#-project-overview) · [How It Works](#-model-architecture--how-it-works) · [Features](#-key-features) · [Structure](#-project-structure) · [Setup & Deployment](#-deployment--local-setup-guide) · [Use Cases](#-industry-use-cases--applications)
+[Overview](#-overview) · [How It Works](#-how-it-works) · [Key Features](#-key-features) · [Project Structure](#-project-structure) · [Deployment & Setup](#-deployment--setup) · [Use Cases](#-use-cases)
 
 </div>
 
 ---
 
-## 📖 Project Overview
+## 📖 Overview
 
-Identifying which young hockey players have the profile of a future professional is hard. The evidence is scattered across physical testing sessions, psychological questionnaires, training histories, and background information, and it is usually weighed by hand and by feel.
+Industrial pump failures rarely announce themselves in advance — sensors drift, vibration patterns shift, and by the time an operator notices, the damage is done. Built during a summer research internship to close that operational gap, **Pump Sensor Failure Detector** ingests real-valued sensor telemetry and classifies each reading as `NORMAL`, `UNUSUAL`, `RECOVERING`, or `FAILURE` inside an interactive dashboard.
 
-**IceBreaker** was created for **Pittsburgh Penguins Performance Training (PPPT)** to turn that scattered evidence into a single, consistent, data-driven view of an athlete. Staff enter an athlete's assessment results (or load a saved record), and IceBreaker returns:
+Raw data in `sensors.csv` spans 52 motor, pump, and bearing channels across roughly 220,000 rows with severe class imbalance (fewer than 10 `BROKEN` rows). Rather than relying on a single classifier with inflated accuracy, the pipeline pairs a class-weighted **XGBoost** model and block-based temporal split with a z-score anomaly detector calibrated strictly on `NORMAL` training rows, then fuses both signals at inference time.
 
-- 🎯 a **pro-success probability** (0–100%),
-- 📐 a **similarity score** against athletes who went on to reach pro level,
-- 🔍 a ranked list of the **factors that pushed the score up or down** for that specific athlete.
-
-The whole system is a trained model, a **REST API**, and an interactive web app, packaged with **Docker containerization** so the same image runs on a laptop or on **Google Cloud Run**.
-
-> ⚠️ **Note:** IceBreaker is a decision-support and exploratory tool, not a selection verdict. It was trained on a small cohort (see [Model Evaluation](#-model-evaluation)) and should inform, never replace, coach and scout judgment.
+Packaging the **inference pipeline** with **Docker** and deploying to **Microsoft Azure** (via Azure Container Apps or App Service) keeps local development and cloud serving aligned, eliminating environment drift during research handoffs.
 
 ---
 
-## 🧠 Model Architecture & How It Works
+## 🧠 How It Works
 
 ### System Architecture
 
 ```mermaid
 flowchart LR
-    A[players.csv<br/>assessment records] --> B[Data Pipeline<br/>cleaning + feature engineering]
-    B --> C[ANOVA selection<br/>top 50 features]
-    C --> D[Scaling + Logistic Regression<br/>grid-search tuning]
-    D --> E[(model.joblib)]
-    E --> F[FastAPI backend<br/>/health /schema /athletes /predict]
-    F <--> G[Streamlit frontend]
-    H[Dockerfile + docker-compose] --> F
-    H --> G
-    H --> I[Google Cloud Run]
+    A["sensors.csv\n(52 channels, ~220k rows)"] --> B["app.py\n(Training & Calibration)"]
+    B --> C[("model.joblib\n(Model + Scaler + Thresholds)")]
+    C --> D["backend.py\n(FastAPI REST API)"]
+    D <--> E["frontend.py\n(Streamlit Dashboard)"]
+    F["Dockerfile & docker-compose.yml\n(Reproducible Containerization)"] --> D
+    F --> E
+    D --> G["Microsoft Azure\n(Container Apps / App Service)"]
+    E --> G
+
 ```
 
-| Layer | Implementation |
-|---|---|
-| **Training** | `app.py`, a cell-by-cell Python script (`# %%`) covering data loading, **Feature Engineering**, **Hyperparameter Tuning**, and **Model Evaluation** |
-| **Artifact** | `model.joblib`: imputer, ANOVA selector, scaler, classifier, reference embeddings, and metadata in one file |
-| **Inference Pipeline** | `backend.py`: **FastAPI** service that validates, imputes, scores, and explains each request |
-| **Interface** | `frontend.py`: **Streamlit** app generated from the backend's `/schema`, so the form always matches the model |
-| **Packaging** | **Docker** image (`python:3.12-slim`) orchestrated with Docker Compose; deployable to **GCP Cloud Run** |
+### Step-by-Step Pipeline
 
-### Step-by-Step Methodology
+1. **Data preparation (`app.py`)**
+* Loads `sensors.csv` with `index_col=0` so the row-index column does not leak into training as a spurious feature.
+* Drops columns with more than 30% missing values and applies forward- and backward-fill to the remaining channels during **exploratory data analysis** and preprocessing.
+* Parses timestamps, sorts rows chronologically, and maps machine status labels (`NORMAL`, `RECOVERING`, `BROKEN`) to `{0, 1, 2}` using `.map().astype(int)` to avoid object-dtype pitfalls in newer `pandas`.
 
-**1. Data Pipeline & Feature Engineering**
-- Loads `players.csv` and keeps fully profiled athlete records (**80 athletes** after filtering).
-- Cleans percentage strings and coerces physical test results to numeric values.
-- Builds **improvement features** for every physical test: absolute change, relative change (%), and change per year between testing sessions.
-- Adds `<test>_measured` flags so the model can distinguish "not tested" from "tested and average".
-- Imputes heavily missing tests with **group-wise medians** (by competition category and gender), then global medians for the rest.
 
-**2. Feature Selection**
-- Runs an **ANOVA F-test (`SelectKBest`)** and keeps the **top 50 features** out of the full engineered set.
+2. **Temporal feature split**
+* Groups chronological rows into 1,000-row blocks instead of using a random split, preventing adjacent-row leakage across train and test sets.
+* Selects a split offset that retains all three classes in the test partition so **model evaluation** reflects real deployment conditions.
 
-**3. Model Training & Loss Optimization**
-- Standardizes features (`StandardScaler`) and trains a **Logistic Regression** classifier, optimizing regularized log-loss with the `saga` solver and balanced class weights.
-- **Hyperparameter Tuning** via stratified 5-fold `GridSearchCV`, scored by ROC-AUC.
 
-| Setting | Value |
-|---|---|
-| Train / test split | 80 / 20, stratified (64 / 16 athletes), `random_state=42` |
-| Feature selection | ANOVA F-test, `k = 50` |
-| Classifier | Logistic Regression (`saga`, `class_weight="balanced"`, `max_iter=2000`) |
-| Search grid | `C ∈ {0.01, 0.03, 0.1}` × regularization `{L1, L2}` |
-| Cross-validation | Stratified 5-fold, scoring = ROC-AUC |
-| **Selected model** | **L2-regularized, `C = 0.1`** |
-| Similarity search | Cosine similarity, top 15 reference profiles |
+3. **Modelling & feature engineering (`app.py`)**
+* Fits `StandardScaler` on training rows only, then trains `XGBClassifier` using `compute_sample_weight(class_weight='balanced')` to address extreme minority-class scarcity.
+* Ranks all 52 sensors by fitted feature importance and searches `n = 2…50` to pick the top 9 features balancing test accuracy, weighted F1, and ROC-AUC:
+`sensor_07`, `sensor_05`, `sensor_00`, `sensor_51`, `sensor_36`, `sensor_11`, `sensor_32`, `sensor_04`, `sensor_10`.
 
-**4. Inference Pipeline (served by the API)**
-1. **Validate** input types; unknown keys are ignored, bad values return a clear `422`.
-2. **Score questionnaires** server-side (1–5 answers → composite scores such as grit, resilience, and mental toughness).
-3. **Derive progress features** from previous test results and the time between tests.
-4. **Impute → scale** with the exact transformers fitted during training. Requests with more than half of the model inputs missing are rejected.
-5. **Predict** the probability of pro-level success.
-6. **Compare** the athlete's standardized feature vector with **44 reference profiles** of athletes who made it, using cosine similarity in that shared **feature-embedding space**.
-7. **Explain** the result: for a linear model, each feature's contribution is exactly `coefficient × standardized value`, giving per-athlete drivers without any approximation.
 
-### 📊 Model Evaluation
+4. **Anomaly threshold calibration (`app.py`)**
+* Computes each row's mean absolute z-score across the 9 selected sensors relative to `NORMAL` training statistics.
+* Sets `anomaly_threshold` at the 99th percentile and `severe_threshold` at the 99.9th percentile of `NORMAL` training scores—without inspecting failure rows—to keep evaluation honest.
 
-Evaluated on a stratified hold-out set of **16 athletes**:
 
-| Metric | Score |
-|---|---|
-| Accuracy | **93.75%** |
-| ROC-AUC | **0.984** |
-| PR-AUC | **0.988** |
-| Precision | 1.00 |
-| Recall | 0.889 |
-| F1 | 0.941 |
+5. **Bundle serialization (`model.joblib`)**
+* Saves a single self-contained artifact via `joblib.dump` containing:
+* `model`: fitted `XGBClassifier` on the top-9 features
+* `scaler`: `StandardScaler` fitted on the top-9 training rows
+* `top_features`: ordered list of the 9 selected sensor names
+* `baseline_mean/std`: `NORMAL` training statistics (`pd.Series`)
+* `anomaly_threshold` & `severe_threshold`: 99th and 99.9th percentile cutoffs
+* `fill_values`: training-set feature medians for missing-value imputation
+* `labels`: `{0: "NORMAL", 1: "RECOVERING", 2: "BROKEN"}`
+* `metrics`: test-set accuracy, weighted F1, and ROC-AUC
+* `examples`: sample `NORMAL`, `RECOVERING`, and `BROKEN` readings
 
-<table>
-  <tr>
-    <td align="center"><b>Feature Impacts</b><br><img src="penguins_features.png" style="max-width: 100%; width: 380px;"></td>
-    <td align="center"><b>Prediction Results</b><br><img src="penguins_prediction_results.png" style="max-width: 100%; width: 380px;"></td>
-  </tr>
-</table>
 
-<p align="center">
-  <b>Prediction Scores</b><br>
-  <img src="penguins_scores.png" style="max-width: 100%; width: 760px;">
-</p>
 
-> ⚠️ **Note:** With only 16 test athletes, each misclassification moves accuracy by about 6 points, and preprocessing statistics were fitted on the full dataset before the split. Treat these numbers as optimistic. A leakage-free pipeline and repeated cross-validation are the natural next step.
 
-> ⚠️ **Note on responsible use:** The model uses background and access-related inputs (household income, parent education, financial support, and demographic fields). These can reflect *access to hockey* rather than *talent*. Audit or remove them before using scores in any real selection decision.
+6. **Inference & UI serving (`backend.py` → `frontend.py`)**
+* `backend.py` loads `model.joblib` once at startup and exposes two **REST API** endpoints:
+* `GET /health` — returns feature names, thresholds, evaluation metrics, and example readings for service checks and **logging & monitoring**.
+* `POST /detect` — accepts a batch of sensor rows in JSON, applies median fill → scaling → XGBoost → z-score anomaly scoring, and fuses predictions:
+* `RECOVERING` if XGBoost predicts class `1`
+* `FAILURE` if XGBoost predicts class `2` **or** `anomaly_score > severe_threshold`
+* `UNUSUAL` if `anomaly_score > anomaly_threshold`
+* `NORMAL` otherwise
+
+
+
+
+* `frontend.py` queries `/health` on load and `/detect` on interaction without importing the model directly, keeping UI and inference decoupled.
+
+
+
+> 💡 **Tip:** `frontend.py` reads `API_URL` from the environment (default `http://localhost:8000`). Inside `docker-compose.yml`, `API_URL=http://backend:8000` routes traffic across the internal Docker network rather than the host.
 
 ---
 
 ## ⚡ Key Features
 
-| | Feature | Details |
-|---|---|---|
-| 🎯 | **Pro-success probability** | Calibrated-style 0–100% score from a regularized logistic regression |
-| 📐 | **Pro-profile similarity** | Cosine similarity to 44 reference profiles, plus the closest matching athletes |
-| 🔍 | **Per-athlete explanations** | Bar chart of the inputs that raised or lowered *this* athlete's score |
-| 🧩 | **Schema-driven UI** | The form is generated from the model's `/schema`: 50 inputs across Background, Cognitive Assessment, Training & Lifestyle, Physical Assessment, and Progress |
-| 🧠 | **Built-in questionnaires** | Five 1–5 scale questionnaires scored by the backend, with required-field tracking |
-| 📈 | **Progress tracking** | Enter previous results and time between tests; improvement metrics are computed automatically |
-| 🗂️ | **Saved-record lookup** | Load an existing athlete by ID (optional; enabled when `players.csv` is available) |
-| 🔌 | **REST API** | `GET /health` · `GET /schema` · `GET /athletes/{id}` · `POST /predict`, with auto-generated Swagger docs at `/docs` |
-| 🐳 | **One-image deployment** | The same Docker image runs both services; Compose wires them together with health checks |
-| 🩺 | **Production Monitoring hooks** | `/health` reports model status and metrics for load balancers, Compose health checks, and uptime checks |
+* **Dual-signal failure detection:** Fuses `XGBClassifier` status probabilities with z-score anomaly thresholds (`anomaly_threshold` and `severe_threshold`) to catch abnormal excursions that status labels alone might miss.
+* **Leakage-resistant evaluation:** Uses 1,000-row temporal blocks and class-aware split selection so test accuracy, weighted F1, and ROC-AUC are not inflated by neighboring rows.
+* **Self-contained `model.joblib` artifact:** Bundles the trained model, scaler, fill medians, anomaly thresholds, metrics, and example readings into one file for **reproducibility** across environments.
+* **FastAPI inference service:** Exposes `GET /health` and `POST /detect` for batch scoring and health checks, keeping model serving isolated from the presentation layer.
+* **Interactive Streamlit dashboard:** Provides a replay slider, per-reading status banner, anomaly gauge, class probability chart, timeline with shaded failure regions, and a detected-episode table.
+* **Single-image Docker & Azure deployment:** Builds one `python:3.15.2-slim-bookworm` image via `Dockerfile` and `.dockerignore`, orchestrates both services in `docker-compose.yml` behind a health check, and deploys cleanly to **Microsoft Azure** (Container Apps or App Service).
 
 ---
 
 ## 📁 Project Structure
 
-```
-IceBreaker/
-├── app.py
-├── backend.py
-├── frontend.py
-├── model.joblib
-├── players.csv
-├── output/
-├── requirements.txt
-├── Dockerfile
-├── docker-compose.yml
-├── .dockerignore
-├── .gitignore
-└── README.md
-```
+| File | Role |
+| --- | --- |
+| `sensors.csv` | Raw 52-channel industrial pump sensor dataset (~220,000 timestamped rows) used during offline training and evaluation |
+| `app.py` | Offline training and calibration script: data cleaning, 1,000-row temporal split, balanced XGBoost training, top-9 feature selection, anomaly threshold tuning, and `model.joblib` export |
+| `model.joblib` | Serialized inference bundle containing the top-9 XGBoost model, scaler, anomaly/severe thresholds, median fill values, evaluation metrics, and example readings |
+| `backend.py` | **FastAPI** service loading `model.joblib` at startup and serving `GET /health` and `POST /detect` for batch inference and **logging & monitoring** |
+| `frontend.py` | **Streamlit** dashboard calling the backend REST API to render the replay slider, status banner, anomaly gauge, probability chart, failure timeline, and episode table |
+| `Dockerfile` | Builds a `python:3.15.2-slim-bookworm` image containing the runtime code and `model.joblib` with pinned dependencies from `requirements.txt` |
+| `.dockerignore` | Excludes `.venv`, `sensors.csv`, `app.py`, and non-runtime files from the Docker build context so only required runtime artifacts enter the image |
+| `docker-compose.yml` | Runs `backend` and `frontend` from the shared image over the internal network, gating frontend startup on the backend health check |
+| `requirements.txt` | Pinned Python package versions (such as `pandas==3.1.1`, `xgboost==3.4.1`, `scikit-learn==1.9.1`) for deterministic builds |
 
-| File / Directory | Description |
-|---|---|
-| `app.py` | 🔬 Training workflow written as `# %%` cells: load data, explore, engineer features, tune, evaluate, plot, and dump the model to `model.joblib` |
-| `backend.py` | 🧩 **FastAPI** inference service (`/health`, `/schema`, `/athletes/{id}`, `/predict`) with validation, questionnaire scoring, and explanations |
-| `frontend.py` | 🖥️ **Streamlit** web app: dynamic form, results dashboard, and driver chart |
-| `model.joblib` | 🤖 Serialized artifact: imputer, ANOVA selector, scaler, logistic regression, reference embeddings, and evaluation metadata |
-| `players.csv` | 🗂️ Source assessment data used for training and saved-record lookup *(not committed; supply your own)* |
-| `output/` | 📊 Evaluation figures: ROC, PR, confusion matrix, correlation heatmap, feature impacts, and prediction scores |
-| `requirements.txt` | 📦 Pinned dependency versions for reproducible builds |
-| `Dockerfile` | 🐳 Slim Python 3.12 image shared by the backend and frontend |
-| `docker-compose.yml` | 🧱 Runs both services, with a backend health check and the frontend waiting on it |
-| `.dockerignore` | 🧹 Keeps data, notebooks-style scripts, outputs, and docs out of the image |
-
-> 💡 **Tip:** `model.joblib` is pickled with scikit-learn **1.9.1**. Keep `requirements.txt` pinned and retrain (run `app.py`) if you change library versions.
-
-> ⚠️ **Note:** Athlete-level data (`players.csv`) is intentionally excluded from version control and from the Docker image.
+> 💡 **Tip:** `sensors.csv` and `app.py` are excluded by `.dockerignore` and never copied into the runtime container; training runs offline and only `model.joblib` is shipped to serving environments.
 
 ---
 
-## 💡 Industry Use Cases & Applications
+## 🚀 Deployment & Setup
 
-| Use Case | How IceBreaker Helps |
-|---|---|
-| 🏒 **Youth talent identification** | Gives scouts and performance staff a consistent, quantified starting point for comparing prospects across categories and testing sessions |
-| 📋 **Individual development planning** | Per-athlete drivers show which attributes (training load, mindset scores, physical progress) are pulling a profile up or down, so coaches know where to focus |
-| 📈 **Longitudinal progress monitoring** | Improvement features turn repeated testing into a trend signal, rewarding athletes who are developing faster than their peers |
-| 🏟️ **Sports-science analytics platforms** | The API-first design lets the model plug into existing dashboards, athlete management systems, or other **REST API integration** workflows |
-| 🔁 **Template for other sports** | The pipeline (assessment data → engineered features → explainable model → API → UI) carries over to any sport with structured testing data |
+### Prerequisites
+
+* **Python 3.15.2** (for local execution without Docker)
+* **Docker Desktop** or **Docker Engine** on Linux (for local container orchestration)
+* **Azure CLI** (`az`) with an active subscription (for **Microsoft Azure** deployment)
+
+### Local — Without Docker
+
+```bash
+# 1. Create and activate a virtual environment
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+
+# 2. Install pinned dependencies
+pip install -r requirements.txt
+
+# 3. Terminal 1 — start the FastAPI backend
+uvicorn backend:app --reload --port 8000
+
+# 4. Terminal 2 — start the Streamlit dashboard
+streamlit run frontend.py
+
+```
+
+Open `http://localhost:8501` for the Streamlit dashboard and `http://localhost:8000/docs` for interactive OpenAPI documentation.
+
+### Local — With Docker Compose
+
+```bash
+# Build the shared image and start backend + frontend
+docker compose up --build
+
+# Verify runtime files inside /app
+docker run --rm pump-detection ls /app
+
+# Stop and remove containers
+docker compose down
+
+```
+
+`docker-compose.yml` gates the frontend on the backend's health check so the dashboard does not start before `model.joblib` is loaded.
+
+> ⚠️ **Note:** After regenerating `model.joblib` via `app.py`, run `docker compose up -d --build` so the container image picks up the updated artifact; code reloaders do not automatically detect changes inside `model.joblib`.
+
+### Microsoft Azure Deployment
+
+#### Option A — Azure Container Apps (Recommended)
+
+```bash
+# 1. Authenticate and select subscription
+az login
+az account set --subscription "<your-subscription-id>"
+
+# 2. Create a resource group and Azure Container Registry
+az group create --name pump-rg --location eastus
+az acr create --resource-group pump-rg --name pumpacrregistry --sku Basic
+az acr login --name pumpacrregistry
+
+# 3. Build and push the container image
+docker build -t pumpacrregistry.azurecr.io/pump-detection:latest .
+docker push pumpacrregistry.azurecr.io/pump-detection:latest
+
+# 4. Create a Container Apps environment
+az containerapp env create \
+  --name pump-env \
+  --resource-group pump-rg \
+  --location eastus
+
+# 5. Deploy the internal API service
+az containerapp create \
+  --name pump-backend \
+  --resource-group pump-rg \
+  --environment pump-env \
+  --image pumpacrregistry.azurecr.io/pump-detection:latest \
+  --command "uvicorn" "backend:app" "--host" "0.0.0.0" "--port" "8000" \
+  --target-port 8000 --ingress internal
+
+# 6. Deploy the external dashboard (replace <BACKEND_FQDN> with the internal FQDN)
+az containerapp create \
+  --name pump-frontend \
+  --resource-group pump-rg \
+  --environment pump-env \
+  --image pumpacrregistry.azurecr.io/pump-detection:latest \
+  --command "streamlit" "run" "frontend.py" \
+    "--server.address=0.0.0.0" "--server.port=8501" "--server.headless=true" \
+  --target-port 8501 --ingress external \
+  --env-vars "API_URL=http://<BACKEND_FQDN>:8000"
+
+```
+
+> 💡 **Tip:** Keep `pump-backend` on `--ingress internal` within the Container Apps environment and expose only `pump-frontend` externally.
+
+#### Option B — Azure App Service
+
+Deploy the container image from Azure Container Registry to an Azure App Service Web App for the backend, then configure `API_URL` on the frontend container app setting to point at the backend URL.
+
+> ⚠️ **Note:** Free and `B1` App Service plans can experience cold starts (~1 minute delay) after idle periods; use a `Standard S1` plan or keep minimum replicas warm in Azure Container Apps during live demos.
 
 ---
 
-## 📜 License & Acknowledgements
+## 🎯 Use Cases
 
-Released under the [MIT License](LICENSE).
+* **Predictive maintenance & SCADA integration:** Connect external telemetry collectors or monitoring scripts to `POST /detect` and `GET /health` to flag `UNUSUAL` and `FAILURE` conditions early and track service health.
+* **Multi-pump & multi-asset rollouts:** Run `app.py` on telemetry from other pumps or rotating equipment to produce a new `model.joblib` bundle, swapping the artifact without altering `backend.py` or `frontend.py`.
+* **Scheduled batch scoring:** Send batches of CSV sensor rows to `POST /detect` from cron jobs or Azure workflows to generate periodic condition reports.
+* **Model comparison & A/B testing:** Because the REST API separates inference from the Streamlit UI, a candidate `model.joblib` can run on a parallel container for side-by-side evaluation before promotion.
+* **Automated CI/CD retraining:** Pair `app.py` with a **CI/CD** pipeline (such as GitHub Actions) that retrains on fresh sensor logs, checks evaluation metrics, and pushes an updated image to Azure Container Registry.
 
-**Acknowledgements**
-- **Pittsburgh Penguins Performance Training (PPPT)**, the organization this project was built for.
-- Built with [scikit-learn](https://scikit-learn.org), [FastAPI](https://fastapi.tiangolo.com), [Streamlit](https://streamlit.io), and [Docker](https://www.docker.com).
+```
 
-> 💡 **Tip:** Found an issue or have an idea? Pull requests are welcome, especially for leakage-free evaluation, fairness auditing of the background features, and additional explainability views.
+```
