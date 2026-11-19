@@ -1,4 +1,3 @@
-```markdown
 <div align="center">
 
 # 🛠️ Pump Sensor Failure Detector
@@ -242,7 +241,3 @@ Deploy the container image from Azure Container Registry to an Azure App Service
 * **Scheduled batch scoring:** Send batches of CSV sensor rows to `POST /detect` from cron jobs or Azure workflows to generate periodic condition reports.
 * **Model comparison & A/B testing:** Because the REST API separates inference from the Streamlit UI, a candidate `model.joblib` can run on a parallel container for side-by-side evaluation before promotion.
 * **Automated CI/CD retraining:** Pair `app.py` with a **CI/CD** pipeline (such as GitHub Actions) that retrains on fresh sensor logs, checks evaluation metrics, and pushes an updated image to Azure Container Registry.
-
-```
-
-```
